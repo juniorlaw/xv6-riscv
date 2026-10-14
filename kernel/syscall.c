@@ -85,6 +85,7 @@ extern uint64 sys_fork(void);
 extern uint64 sys_exit(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_wait2(void);
+extern uint64 sys_getprocs(void);
 extern uint64 sys_pipe(void);
 extern uint64 sys_read(void);
 extern uint64 sys_kill(void);
@@ -113,6 +114,7 @@ static uint64 (*syscalls[])(void) = {
   [SYS_exit]    = sys_exit,
   [SYS_wait]    = sys_wait,
   [SYS_wait2]    = sys_wait2,
+  [SYS_getprocs] = sys_getprocs,
   [SYS_pipe]    = sys_pipe,
   [SYS_read]    = sys_read,
   [SYS_kill]    = sys_kill,

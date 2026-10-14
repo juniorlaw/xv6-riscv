@@ -122,3 +122,15 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_getprocs(void)
+{
+  uint64 addr;
+
+  //get the address of the process array
+  argaddr(0, &addr);
+
+  //call the kernel function to fill the array
+  return kgetprocs(addr);
+}

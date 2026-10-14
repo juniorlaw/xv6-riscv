@@ -487,6 +487,74 @@ kwait2(uint64 addr, uint64 rusage_addr)
   }
 }
 
+
+
+int
+kgetprocs(uint64 addr)
+{
+  //p is used to look at each process in the process table
+  struct proc *p;
+
+  //curr is the process that called getprocs, usually ps
+  struct proc *curr = myproc();
+
+  //info holds the information we collect about one process
+  struct pstat info;
+
+  //count keeps track of how many processes we find
+  int count = 0;
+
+  //start at the first process and go through the whole process table
+  for(p = proc; p < &proc[NPROC]; p++){
+
+    //lock the process so its information does not change while we read it
+    acquire(&p->lock);
+
+    //check if this process slot is empty
+    if(p->state == UNUSED){
+
+      //unlock the empty process slot
+      release(&p->lock);
+
+      //skip this slot and move to the next process
+      continue;
+    }
+
+    //save the process id
+    info.pid = p->pid;
+
+    //save the current state, such as running or sleeping
+    info.state = p->state;
+
+    //save how much memory the process is using
+    info.size = p->sz;
+
+    //save the parent process id, or 0 if there is no parent
+    info.ppid = p->parent ? p->parent->pid : 0;
+
+    //copy the process name into our info structure
+    safestrcpy(info.name, p->name, sizeof(info.name));
+
+    //unlock the process now that we have collected its information
+    release(&p->lock);
+
+    //copy the process information into the users array
+    //curr->sz tells copyout the size of the users memory
+    if(copyout(curr->pagetable, curr->sz, addr + count * sizeof(info),
+              (char *)&info, sizeof(info)) < 0){
+
+      //return -1 if the copy fails
+      return -1;
+    }
+
+    //we successfully collected one process, so increase the count
+    count++;
+  }
+
+  //return the total number of processes we found
+  return count;
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
