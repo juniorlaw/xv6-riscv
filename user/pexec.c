@@ -15,8 +15,18 @@ main(int argc, char *argv[])
         exit(-1);
     }
 
-    priority = atoi(argv[1]);
-    setpriority(priority);
+    priority = 0;
+    for(i=0; argv[1][i]; i++){
+        if(argv[1][i] < '0' || argv[1][i] > '9' || priority > 49){
+            fprintf(2, "pexec: priority must be between 0 and 49\n");
+            exit(-1);
+        }
+        priority = priority * 10 + argv[1][i] - '0';
+    }
+    if(argv[1][0] == 0 || setpriority(priority) < 0){
+        fprintf(2, "pexec: priority must be between 0 and 49\n");
+        exit(-1);
+    }
     for(i=2; i<argc; i++)
     newargv[i-2] = argv[i];
     newargv[argc-2] = 0;

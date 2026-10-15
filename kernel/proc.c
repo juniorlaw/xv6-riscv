@@ -7,6 +7,25 @@
 #include "defs.h"
 #include "pstat.h"
 
+//global clock tick counter
+extern uint ticks;
+
+//get the current time in clock ticks
+static uint
+nowticks(void)
+{
+  return __atomic_load_n(&ticks, __ATOMIC_RELAXED);
+}
+
+//record when a process enters the ready queue
+//the caller must already hold the process lock
+static void
+makeready(struct proc *p)
+{
+  p->readytime = nowticks();
+  p->state = RUNNABLE;
+}
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -125,6 +144,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->cputime = 0;
+  p->priority = 0;
+  p->readytime = 0;
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -169,6 +190,9 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->priority = 0;
+  p->readytime = 0;
+  p->cputime = 0;
   p->state = UNUSED;
 }
 
@@ -227,7 +251,7 @@ userinit(void)
 
   p->cwd = namei("/");
 
-  p->state = RUNNABLE;
+  makeready(p);
 
   release(&p->lock);
 }
@@ -283,6 +307,11 @@ kfork(void)
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
+  //make the child inherit its parents priority
+  //np is the new child process
+  //p is the parent process
+  np->priority = p->priority;
+
   // increment reference counts on open file descriptors.
   for (i = 0; i < NOFILE; i++)
     if (p->ofile[i])
@@ -300,7 +329,7 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
-  np->state = RUNNABLE;
+  makeready(np);
   release(&np->lock);
 
   return pid;
@@ -532,6 +561,15 @@ kgetprocs(uint64 addr)
     //save the parent process id, or 0 if there is no parent
     info.ppid = p->parent ? p->parent->pid : 0;
 
+    //copy the process priority into the process information
+    info.priority = p->priority;
+
+    //copy the time the process became runnable
+    info.readytime = p->readytime;
+
+    //copy the total cpu time used
+    info.cputime = p->cputime;
+
     //copy the process name into our info structure
     safestrcpy(info.name, p->name, sizeof(info.name));
 
@@ -555,6 +593,36 @@ kgetprocs(uint64 addr)
   return count;
 }
 
+
+int
+kgetpriority(void)
+{
+  //get the process that is currently running
+  struct proc *p = myproc();
+
+  //return the priority of the current process
+  return p->priority;
+}
+
+
+int
+ksetpriority(int priority)
+{
+  //check if the priority is within the allowed range
+  if(priority < 0 || priority > 49)
+    return -1;
+
+  //get the process that is currently running
+  struct proc *p = myproc();
+
+  //update the current process priority
+  p->priority = priority;
+
+  //return 0 to indicate success
+  return 0;
+}
+
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -569,40 +637,96 @@ scheduler(void)
   struct cpu *c = mycpu();
 
   c->proc = 0;
-  for (;;) {
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
-    intr_on();
-    intr_off();
 
-    int found = 0;
-    for (p = proc; p < &proc[NPROC]; p++) {
+  for(;;) {
+    intr_on();
+
+#ifdef PRIORITY_SCHEDULER
+
+    //keep the clock and runnable set stable while choosing on one cpu
+    push_off();
+
+    //find the runnable process with the highest effective priority
+    struct proc *best = 0;
+    int bestpriority = -1;
+#ifdef AGING_ENABLED
+    uint now = nowticks();
+#endif
+
+    for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
+
+      if(p->state == RUNNABLE) {
+
+        //start with the process base priority
+        int effective = p->priority;
+
+        #ifdef AGING_ENABLED
+        //increase priority based on time spent waiting
+        uint age = now - p->readytime;
+        effective += (age > 99 ? 99 : (int)age);
+
+        //cap effective priority at 99
+        if(effective > 99)
+          effective = 99;
+        #endif
+
+        //save the process with the highest effective priority
+        if(effective > bestpriority) {
+          bestpriority = effective;
+          best = p;
+        }
+      }
+
+      release(&p->lock);
+    }
+
+    //run the process with the highest effective priority
+    if(best != 0) {
+      acquire(&best->lock);
+      pop_off(); //only best->lock remains held when switching
+
+      if(best->state == RUNNABLE) {
+        best->state = RUNNING;
+        c->proc = best;
+
+        swtch(&c->context, &best->context);
+
+        c->proc = 0;
+      }
+
+      release(&best->lock);
+    } else {
+      pop_off();
+      //no runnable processes
+      asm volatile("wfi");
+    }
+
+#else
+
+    //original round-robin scheduler
+    int found = 0;
+
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+
+      if(p->state == RUNNABLE) {
         p->state = RUNNING;
         c->proc = p;
+
         swtch(&c->context, &p->context);
 
-        // Don't re-enable interrupts on release.
-        mycpu()->intena = 0;
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
         c->proc = 0;
         found = 1;
       }
+
       release(&p->lock);
     }
-    if (found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+
+    if(found == 0)
       asm volatile("wfi");
-    }
+
+#endif
   }
 }
 
@@ -638,8 +762,12 @@ void
 yield(void)
 {
   struct proc *p = myproc();
+
   acquire(&p->lock);
-  p->state = RUNNABLE;
+
+  //record when the process returns to the ready queue
+  makeready(p);
+
   sched();
   release(&p->lock);
 }
@@ -725,7 +853,7 @@ wakeup(void *chan)
       // If this waiting process has gotten so far as to actually
       // go to sleep, also set it back to RUNNING.
       if (p->state == SLEEPING) {
-        p->state = RUNNABLE;
+        makeready(p);
       }
     }
     release(&p->lock);
@@ -746,7 +874,7 @@ kkill(int pid)
       p->killed = 1;
       if (p->state == SLEEPING) {
         // Wake process from sleep().
-        p->state = RUNNABLE;
+          makeready(p);
       }
       release(&p->lock);
       return 0;

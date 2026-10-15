@@ -26,6 +26,8 @@ entry("exit");
 entry("wait");
 entry("wait2");
 entry("getprocs");
+entry("getpriority");
+entry("setpriority");
 entry("pipe");
 entry("read");
 entry("write");

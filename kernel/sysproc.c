@@ -134,3 +134,22 @@ sys_getprocs(void)
   //call the kernel function to fill the array
   return kgetprocs(addr);
 }
+
+uint64
+sys_getpriority(void)
+{
+  //call the kernel function to get the current process priority
+  return kgetpriority();
+}
+
+uint64
+sys_setpriority(void)
+{
+  int priority;
+
+  //get the priority passed by the user program
+  argint(0, &priority);
+
+  //call the kernel function to change the priority
+  return ksetpriority(priority);
+}

@@ -11,6 +11,8 @@ int exit(int) __attribute__((noreturn));
 int wait(int *);
 int wait2(int*, struct rusage*);
 int getprocs(struct pstat*);
+int getpriority(void);
+int setpriority(int);
 int pipe(int *);
 int write(int, const void *, int);
 int read(int, void *, int);
