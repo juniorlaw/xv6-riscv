@@ -157,7 +157,6 @@ UPROGS=\
 	$U/_matmul\
 	$U/_ps\
 	$U/_pexec\
-	$U/_agingtest\
 
 
 fs.img: mkfs/mkfs README $(UPROGS)
